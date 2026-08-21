@@ -22,6 +22,9 @@ export async function POST(request: Request) {
     if (!(file instanceof File)) {
       return NextResponse.json({ error: "분석할 파일을 선택해주세요." }, { status: 400 });
     }
+    if (file.type !== "application/pdf" && !file.name.toLowerCase().endsWith(".pdf")) {
+      return NextResponse.json({ error: "현재 테스트 버전은 PDF 파일만 지원합니다." }, { status: 400 });
+    }
 
     const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
     const uploaded = await openai.files.create({ file, purpose: "user_data" });
@@ -45,8 +48,19 @@ export async function POST(request: Request) {
     const text = response.output_text || "{}";
     const cleaned = text.replace(/^```json\s*/i, "").replace(/```$/i, "").trim();
     return NextResponse.json({ result: JSON.parse(cleaned), fileName: file.name });
-  } catch (error) {
-    console.error(error);
-    return NextResponse.json({ error: "파일 분석에 실패했습니다. PDF 형식과 API 설정을 확인해주세요." }, { status: 500 });
+  } catch (error: unknown) {
+    console.error("PDF analysis error", error);
+    const e = error as { status?: number; code?: string; type?: string; message?: string };
+    let hint = "PDF와 API 설정을 확인해주세요.";
+    if (e.status === 401) hint = "API 키 인증에 실패했습니다. Vercel의 OPENAI_API_KEY를 확인해주세요.";
+    else if (e.status === 429) hint = "API 사용 한도 또는 결제 상태를 확인해주세요.";
+    else if (e.status === 403) hint = "현재 API 프로젝트에서 해당 모델/파일 기능을 사용할 권한이 있는지 확인해주세요.";
+    else if (e.status === 413) hint = "PDF 파일이 현재 업로드 허용 크기보다 큽니다.";
+
+    return NextResponse.json({
+      error: "파일 분석에 실패했습니다.",
+      hint,
+      detail: e.message || e.code || e.type || "원인을 확인할 수 없습니다.",
+    }, { status: typeof e.status === "number" && e.status >= 400 && e.status < 600 ? e.status : 500 });
   }
 }
